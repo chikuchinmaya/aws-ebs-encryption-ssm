@@ -1,0 +1,141 @@
+schemaVersion: '0.3'
+description: Automates encryption of an existing EBS volume by creating a snapshot, encrypted copy, and replacing the original volume on an EC2 instance.
+
+parameters:
+  InstanceId:
+    type: String
+    description: The ID of the EC2 instance.
+  VolumeId:
+    type: String
+    description: The ID of the EBS volume to encrypt.
+  DeviceName:
+    type: String
+    description: The device name (e.g., /dev/xvda).
+  AvailabilityZone:
+    type: String
+    description: The availability zone of the volume (e.g., us-east-1a).
+  AutomationAssumeRole:
+    type: String
+    default: arn:aws:iam::<YOUR_AWS_ACCOUNT_ID>:role/SSM-EBS-Encryption-Role
+    description: IAM role for automation execution. **Replace <YOUR_AWS_ACCOUNT_ID> with your AWS Account ID.**
+
+mainSteps:
+  - name: CreateSnapshot
+    action: aws:executeAwsApi
+    nextStep: WaitForSnapshot
+    inputs:
+      Service: ec2
+      Api: CreateSnapshot
+      VolumeId: '{{ VolumeId }}'
+      Description: Snapshot before encryption
+    outputs:
+      - Name: SnapshotId
+        Selector: $.SnapshotId
+        Type: String
+
+  - name: WaitForSnapshot
+    action: aws:waitForAwsResourceProperty
+    nextStep: CreateVolumeFromSnapshot
+    inputs:
+      Service: ec2
+      Api: DescribeSnapshots
+      SnapshotIds:
+        - '{{ CreateSnapshot.SnapshotId }}'
+      PropertySelector: '$.Snapshots[0].State'
+      DesiredValues:
+        - completed
+
+  - name: CreateVolumeFromSnapshot
+    action: aws:executeAwsApi
+    nextStep: WaitForVolume
+    inputs:
+      Service: ec2
+      Api: CreateVolume
+      SnapshotId: '{{ CreateSnapshot.SnapshotId }}'
+      AvailabilityZone: '{{ AvailabilityZone }}'
+      Encrypted: true
+      KmsKeyId: '<KMS_KEY_PLACEHOLDER>'  # 🔐 Replace this via script with your real KMS Key ID
+    outputs:
+      - Name: EncryptedVolumeId
+        Selector: $.VolumeId
+        Type: String
+
+  - name: WaitForVolume
+    action: aws:waitForAwsResourceProperty
+    nextStep: StopInstance
+    inputs:
+      Service: ec2
+      Api: DescribeVolumes
+      VolumeIds:
+        - '{{ CreateVolumeFromSnapshot.EncryptedVolumeId }}'
+      PropertySelector: '$.Volumes[0].State'
+      DesiredValues:
+        - available
+
+  - name: StopInstance
+    action: aws:executeAwsApi
+    nextStep: WaitForInstanceStop
+    inputs:
+      Service: ec2
+      Api: StopInstances
+      InstanceIds:
+        - '{{ InstanceId }}'
+
+  - name: WaitForInstanceStop
+    action: aws:waitForAwsResourceProperty
+    nextStep: DetachOldVolume
+    inputs:
+      Service: ec2
+      Api: DescribeInstances
+      InstanceIds:
+        - '{{ InstanceId }}'
+      PropertySelector: '$.Reservations[0].Instances[0].State.Name'
+      DesiredValues:
+        - stopped
+
+  - name: DetachOldVolume
+    action: aws:executeAwsApi
+    nextStep: WaitForDetach
+    inputs:
+      Service: ec2
+      Api: DetachVolume
+      VolumeId: '{{ VolumeId }}'
+
+  - name: WaitForDetach
+    action: aws:waitForAwsResourceProperty
+    nextStep: AttachNewVolume
+    inputs:
+      Service: ec2
+      Api: DescribeVolumes
+      VolumeIds:
+        - '{{ VolumeId }}'
+      PropertySelector: '$.Volumes[0].State'
+      DesiredValues:
+        - available
+
+  - name: AttachNewVolume
+    action: aws:executeAwsApi
+    nextStep: StartInstance
+    inputs:
+      Service: ec2
+      Api: AttachVolume
+      VolumeId: '{{ CreateVolumeFromSnapshot.EncryptedVolumeId }}'
+      InstanceId: '{{ InstanceId }}'
+      Device: '{{ DeviceName }}'
+
+  - name: StartInstance
+    action: aws:executeAwsApi
+    nextStep: DeleteOldVolume
+    inputs:
+      Service: ec2
+      Api: StartInstances
+      InstanceIds:
+        - '{{ InstanceId }}'
+
+  - name: DeleteOldVolume
+    action: aws:executeAwsApi
+    isEnd: true
+    inputs:
+      Service: ec2
+      Api: DeleteVolume
+      VolumeId: '{{ VolumeId }}'
