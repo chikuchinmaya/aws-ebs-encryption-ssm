@@ -93,6 +93,8 @@ aws ssm create-document \
   --document-format YAML \
   --content file://encrypt-ebs-automation.yml
 ```
+![SSM Automation](media/DIG.png)
+
 ## ▶️ Run Automation Execution (via Console)
 Go to AWS Systems Manager > Automation
 
@@ -116,6 +118,7 @@ arn:aws:iam::<YOUR_ACCOUNT_ID>:role/SSM-EBS-Encryption-Role
 Click Execute and monitor the status
 
 Use the values from unencrypted_volumes.csv generated in Step 4.
+![inputs](media/final0.png)
 
 ## ✅ Summary of What Happens
 Create an unencrypted snapshot of the target volume
@@ -125,6 +128,9 @@ Use the snapshot to create a new encrypted volume
 Stop the instance, detach the old volume, and attach the new encrypted one
 
 Restart the instance and delete the unencrypted volume
+![Execution Progress](media/final2.png)
+
+![Automation History](media/final1.png)
 
 ## 📦 Requirements
 AWS CLI configured (aws configure)
